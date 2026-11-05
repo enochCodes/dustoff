@@ -13,6 +13,12 @@ free, and lists **8 more** that only a Terminal command can reach. It measures
 everything in parallel, rates each entry by what you actually lose, and deletes
 nothing until you say so.
 
+<img width="1280" height="779" alt="2026-11-05 09 31 10" src="https://github.com/user-attachments/assets/65f23f0b-e81a-4777-826a-01627a165642" />
+<img width="1280" height="779" alt="2026-11-05 09 31 20" src="https://github.com/user-attachments/assets/a65879d0-f64b-44e5-9494-7bf58871a876" />
+
+
+
+
 ```
   dustoff   31.7 G reclaimable  ·  64 items  ·  9.97 G selected in 2 items
   disk  412 G used of 994 G  ·  582 G free   mode: trash
