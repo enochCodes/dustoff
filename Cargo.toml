@@ -1,0 +1,32 @@
+[package]
+name = "dustoff"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Deep storage cleaner for macOS with a terminal UI — finds reclaimable caches from AI coding agents, build tools, browsers and Xcode"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/enochCodes/dustoff"
+homepage = "https://github.com/enochCodes/dustoff"
+keywords = ["cleaner", "cache", "disk-space", "tui", "macos"]
+categories = ["command-line-utilities", "filesystem", "development-tools"]
+exclude = ["/.github", "/assets"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+dirs = "7"
+ratatui = "0.30"
+rayon = "1"
+trash = "5"
+walkdir = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
