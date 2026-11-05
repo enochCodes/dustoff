@@ -24,6 +24,7 @@ fn item(cat: Cat, label: &'static str, risk: Risk, bytes: u64, path: &str) -> It
         files: 128,
         selected: false,
         blocked: None,
+        argv: &[],
     }
 }
 
@@ -225,6 +226,83 @@ fn category_toggle_only_touches_the_visible_category() {
         .count();
     assert!(dev_on > 0);
     assert_eq!(other_on, 0, "toggling one category must not reach another");
+}
+
+fn prune(label: &'static str, risk: Risk, bytes: u64, argv: &'static [&'static str]) -> Item {
+    let mut i = item(Cat::Containers, label, risk, bytes, "");
+    i.act = Act::Exec;
+    i.argv = argv;
+    i
+}
+
+#[test]
+fn container_rows_render_as_commands() {
+    let mut app = demo();
+    app.items.push(prune(
+        "Docker · build cache",
+        Risk::Rebuildable,
+        6_700_000_000,
+        &["docker", "builder", "prune", "-a", "-f"],
+    ));
+    let cats = app.cats();
+    app.cat_idx = cats.iter().position(|c| *c == Cat::Containers).unwrap();
+
+    let out = render(&mut app, 104, 30);
+    assert!(out.contains("Docker · build cache"));
+    // An unselected command row uses ▷, not the ○ of a file row.
+    assert!(out.contains("▷"), "command rows need their own marker");
+    // The detail pane shows the exact command that will run.
+    assert!(out.contains("docker builder prune -a -f"));
+}
+
+#[test]
+fn measured_advisories_do_not_inflate_the_reclaimable_total() {
+    let mut app = demo();
+    let before = app.total_bytes();
+
+    let mut disk = item(
+        Cat::Containers,
+        "Docker Desktop · VM disk image",
+        Risk::Careful,
+        48_000_000_000,
+        "/home/u/Library/Containers/com.docker.docker/Data",
+    );
+    disk.act = Act::Advise;
+    app.items.push(disk);
+
+    assert_eq!(
+        app.total_bytes(),
+        before,
+        "a 48 GB advisory must not be counted as reclaimable"
+    );
+    assert_eq!(app.cat_bytes(Cat::Containers), 0);
+}
+
+#[test]
+fn recommended_skips_destructive_prunes() {
+    let mut app = demo();
+    app.items.push(prune(
+        "Docker · build cache",
+        Risk::Rebuildable,
+        6_700_000_000,
+        &["docker", "builder", "prune", "-a", "-f"],
+    ));
+    app.items.push(prune(
+        "Docker · unused volumes",
+        Risk::Careful,
+        3_200_000_000,
+        &["docker", "volume", "prune", "-a", "-f"],
+    ));
+
+    app.clear_selection();
+    app.select_recommended();
+
+    let picked: Vec<&'static str> = app.selected_commands();
+    assert!(picked.contains(&"Docker · build cache"));
+    assert!(
+        !picked.contains(&"Docker · unused volumes"),
+        "volume pruning can destroy data and must never be automatic"
+    );
 }
 
 #[test]

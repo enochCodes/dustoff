@@ -172,7 +172,7 @@ impl App {
     pub fn cat_bytes(&self, c: Cat) -> u64 {
         self.items
             .iter()
-            .filter(|i| i.cat == c)
+            .filter(|i| i.cat == c && !i.advisory())
             .map(|i| i.bytes)
             .sum()
     }
@@ -186,7 +186,11 @@ impl App {
     }
 
     pub fn total_bytes(&self) -> u64 {
-        self.items.iter().map(|i| i.bytes).sum()
+        self.items
+            .iter()
+            .filter(|i| !i.advisory())
+            .map(|i| i.bytes)
+            .sum()
     }
 
     pub fn selected_bytes(&self) -> u64 {
@@ -201,6 +205,15 @@ impl App {
         self.items.iter().filter(|i| i.selected).count()
     }
 
+    /// Selected items that run a command rather than removing a path.
+    pub fn selected_commands(&self) -> Vec<&'static str> {
+        self.items
+            .iter()
+            .filter(|i| i.selected && i.runs_command())
+            .map(|i| i.label)
+            .collect()
+    }
+
     pub fn blocked_count(&self) -> usize {
         self.items.iter().filter(|i| i.blocked.is_some()).count()
     }
@@ -209,7 +222,7 @@ impl App {
     pub fn cat_peak(&self, c: Cat) -> u64 {
         self.items
             .iter()
-            .filter(|i| i.cat == c)
+            .filter(|i| i.cat == c && !i.advisory())
             .map(|i| i.bytes)
             .max()
             .unwrap_or(1)

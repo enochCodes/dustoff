@@ -246,6 +246,11 @@ fn items(f: &mut Frame, app: &mut App, area: Rect) {
 
         let check = if it.advisory() {
             Span::styled("  ⚙ ", Style::default().fg(t::DIM))
+        } else if it.runs_command() {
+            Span::styled(
+                if it.selected { "  ▶ " } else { "  ▷ " },
+                Style::default().fg(if it.selected { t::ACCENT } else { t::FAINT }),
+            )
         } else if it.blocked.is_some() {
             Span::styled("  ⊘ ", Style::default().fg(t::BLOCKED))
         } else if it.selected {
@@ -272,8 +277,13 @@ fn items(f: &mut Frame, app: &mut App, area: Rect) {
             )
         };
 
-        let size = if it.advisory() {
+        let size = if it.advisory() && it.bytes == 0 {
             Span::styled("       —", Style::default().fg(t::DIM))
+        } else if it.advisory() {
+            Span::styled(
+                format!("{:>8}", bytes(it.bytes)),
+                Style::default().fg(t::DIM),
+            )
         } else {
             Span::styled(
                 format!("{:>8}", bytes(it.bytes)),
@@ -369,6 +379,8 @@ fn detail_pane(f: &mut Frame, app: &App, area: Rect) {
         if lines.is_empty() {
             let loc = if it.advisory() {
                 format!("  $ {}", it.hint)
+            } else if it.runs_command() {
+                format!("  $ {}", it.argv.join(" "))
             } else {
                 format!(
                     "  {}   {} files",
@@ -382,7 +394,11 @@ fn detail_pane(f: &mut Frame, app: &App, area: Rect) {
             };
             lines.push(Line::from(Span::styled(
                 loc,
-                Style::default().fg(if it.advisory() { t::REBUILD } else { t::ACCENT }),
+                Style::default().fg(if it.advisory() || it.runs_command() {
+                    t::REBUILD
+                } else {
+                    t::ACCENT
+                }),
             )));
         }
         lines.push(Line::from(Span::styled(
@@ -518,13 +534,31 @@ fn confirm(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(t::DIM),
         ))),
         Mode::Trash => lines.push(Line::from(Span::styled(
-            "   Items go to the Trash and can be put back.",
+            "   Files go to the Trash and can be put back.",
             Style::default().fg(t::SAFE),
         ))),
         Mode::Permanent => lines.push(Line::from(Span::styled(
             "   Unlinked immediately. There is no undo.",
             Style::default().fg(t::CAREFUL),
         ))),
+    }
+
+    // Trash mode promises recoverability. A container prune cannot honour that,
+    // so say so rather than letting the mode label imply otherwise.
+    let cmds = app.selected_commands();
+    if !cmds.is_empty() && app.mode != Mode::Dry {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "   {} prune command(s) will run against the container daemon.",
+                cmds.len()
+            ),
+            Style::default().fg(t::REBUILD).bold(),
+        )));
+        lines.push(Line::from(Span::styled(
+            "   Those are not recoverable, in any mode — there is no Trash inside a VM.",
+            Style::default().fg(t::REBUILD),
+        )));
     }
 
     if !careful.is_empty() {

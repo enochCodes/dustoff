@@ -5,6 +5,7 @@
 
 mod app;
 mod danger;
+mod docker;
 #[cfg(test)]
 mod render_tests;
 mod rules;
@@ -160,6 +161,9 @@ fn clean_headless(mode: Mode, yes: bool) -> anyhow::Result<()> {
             it.risk.label(),
             it.label
         );
+        if it.runs_command() {
+            println!("                 $ {}", it.argv.join(" "));
+        }
     }
     if picked.len() > 12 {
         println!("      {:>9}  and {} more", "", picked.len() - 12);
@@ -171,6 +175,13 @@ fn clean_headless(mode: Mode, yes: bool) -> anyhow::Result<()> {
         println!("  Add --trash (recoverable) or --permanent to act.");
         println!();
         return Ok(());
+    }
+
+    let cmds = picked.iter().filter(|i| i.runs_command()).count();
+    if cmds > 0 {
+        println!("  {cmds} of these run a prune against the container daemon, which is not");
+        println!("  recoverable in any mode. The rest follow the chosen mode.");
+        println!();
     }
 
     if !yes {

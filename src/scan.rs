@@ -27,11 +27,17 @@ pub struct Item {
     pub selected: bool,
     /// Set when the safety layer refused the path. Shown, never deletable.
     pub blocked: Option<String>,
+    /// For `Act::Exec`: the command to run. Always a compile-time constant.
+    pub argv: &'static [&'static str],
 }
 
 impl Item {
     pub fn advisory(&self) -> bool {
         self.act == Act::Advise
+    }
+    /// Runs a command rather than removing a path.
+    pub fn runs_command(&self) -> bool {
+        self.act == Act::Exec
     }
     pub fn deletable(&self) -> bool {
         self.blocked.is_none() && !self.advisory() && self.bytes > 0
@@ -177,6 +183,14 @@ fn resolve(rule: &Rule) -> Vec<PathBuf> {
                 .collect()
         }
 
+        Finder::Measured(p) => {
+            let path = expand(p);
+            if path.exists() { vec![path] } else { vec![] }
+        }
+
+        // Expanded in `run`, which can emit the daemon's own labels and sizes.
+        Finder::DockerDf => vec![],
+
         Finder::Litter {
             roots,
             names,
@@ -216,7 +230,10 @@ fn read_children(dir: &Path) -> Vec<PathBuf> {
 pub fn run(rules: Vec<Rule>, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
     // Advisories first: they cost nothing to produce and give the UI content
     // immediately while the real scan warms up.
-    for rule in rules.iter().filter(|r| r.act == Act::Advise) {
+    for rule in rules
+        .iter()
+        .filter(|r| r.act == Act::Advise && !matches!(r.find, Finder::Measured(_)))
+    {
         let _ = tx.send(Msg::Found(Box::new(Item {
             cat: Cat::Manual,
             label: rule.label,
@@ -229,10 +246,39 @@ pub fn run(rules: Vec<Rule>, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
             files: 0,
             selected: false,
             blocked: None,
+            argv: &[],
         })));
     }
 
-    let scannable: Vec<&Rule> = rules.iter().filter(|r| r.act != Act::Advise).collect();
+    // Ask the container daemon what it can free, before the path scan starts:
+    // it is a quick round trip and the numbers are usually the headline.
+    if rules.iter().any(|r| matches!(r.find, Finder::DockerDf)) && !cancel.load(Ordering::Relaxed) {
+        let _ = tx.send(Msg::Probing("docker system df".into()));
+        for rc in crate::docker::reclaimable() {
+            let _ = tx.send(Msg::Found(Box::new(Item {
+                cat: Cat::Containers,
+                label: rc.label,
+                detail: rc.detail,
+                hint: "",
+                risk: rc.risk,
+                act: Act::Exec,
+                path: PathBuf::new(),
+                bytes: rc.bytes,
+                files: 0,
+                selected: false,
+                blocked: None,
+                argv: rc.argv,
+            })));
+        }
+    }
+
+    // Advisories have nothing to scan, except the Measured ones, which exist
+    // precisely to report a size.
+    let scannable: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.act != Act::Advise || matches!(r.find, Finder::Measured(_)))
+        .filter(|r| !matches!(r.find, Finder::DockerDf))
+        .collect();
 
     scannable.par_iter().for_each(|rule| {
         if cancel.load(Ordering::Relaxed) {
@@ -280,6 +326,7 @@ pub fn run(rules: Vec<Rule>, tx: Sender<Msg>, cancel: Arc<AtomicBool>) {
                 files,
                 selected: false,
                 blocked,
+                argv: &[],
             })));
         }
     });
@@ -326,6 +373,24 @@ pub fn purge(items: &[Item], mode: Mode) -> Outcome {
     let mut out = Outcome::default();
 
     for it in items.iter().filter(|i| i.selected && i.deletable()) {
+        // An Exec item has no path to vet; its argv is a compile-time constant
+        // and never reaches a shell.
+        if it.runs_command() {
+            if mode == Mode::Dry {
+                out.freed += it.bytes;
+                out.removed += 1;
+                continue;
+            }
+            match crate::docker::run(it.argv, 180) {
+                Ok(()) => {
+                    out.freed += it.bytes;
+                    out.removed += 1;
+                }
+                Err(e) => out.failed.push((PathBuf::from(it.argv.join(" ")), e)),
+            }
+            continue;
+        }
+
         let verdict = match it.act {
             Act::Dir => vet_dir(&it.path),
             Act::Clear => vet_search_root(&it.path),
@@ -450,6 +515,7 @@ mod tests {
             files: 1,
             selected: true,
             blocked: None,
+            argv: &[],
         };
         let out = purge(std::slice::from_ref(&it), Mode::Dry);
         assert_eq!(out.freed, 512);
@@ -471,6 +537,7 @@ mod tests {
             files: 1,
             selected: true,
             blocked: None,
+            argv: &[],
         }
     }
 

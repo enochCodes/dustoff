@@ -8,9 +8,10 @@ never open: a Go build cache that is never evicted, four Java language-server
 workspaces, a browser cache measured in gigabytes, iOS device symbol sets, and —
 increasingly — whatever your coding agents have been writing down all year.
 
-dustoff knows **149 of those places**, plus **8 more** that only a Terminal
-command can reach. It measures them in parallel, rates each one by what you
-actually lose, and deletes nothing until you say so.
+dustoff knows **160 of those places**, asks your container daemon what *it* can
+free, and lists **8 more** that only a Terminal command can reach. It measures
+everything in parallel, rates each entry by what you actually lose, and deletes
+nothing until you say so.
 
 ```
   dustoff   31.7 G reclaimable  ·  64 items  ·  9.97 G selected in 2 items
@@ -38,9 +39,9 @@ actually lose, and deletes nothing until you say so.
 `cruft` and `chaff` cover similar ground. All three are **project** cleaners:
 point them at a directory, they reclaim build artifacts.
 
-dustoff is a **machine** cleaner. Stale project directories are one of its nine
-categories, not the whole product. The other eight are the ones that quietly add
-up, and the AI-agent category is not covered by any of them.
+dustoff is a **machine** cleaner. Stale project directories are one of its ten
+categories, not the whole product. The other nine are the ones that quietly add
+up — and the AI-agent and container categories are not covered by any of them.
 
 ## Install
 
@@ -102,6 +103,10 @@ Every entry carries one, and rows are coloured by it.
 | **careful** | Session transcripts, Xcode archives, simulator devices, local models. Things you might actually want. Never auto-selected. |
 | **⊘** | Refused by the safety layer. Shown so you know it was considered, never deletable. |
 
+Rows marked `▷` run a command against a container daemon instead of removing a
+path. Those are never recoverable, in any mode — there is no Trash inside a VM —
+and the confirmation says so.
+
 ## What it covers
 
 **AI agents & copilots** — Claude Code (telemetry, shell snapshots, todos, node
@@ -124,6 +129,32 @@ history and logins are never in scope.
 
 **Applications** — VS Code, Slack, Discord, Spotify, Raycast, Postman, Figma,
 Notion, Docker Desktop logs.
+
+**Docker & containers** — the usual biggest offender, and the one a file-based
+cleaner cannot touch. On macOS every image, layer and volume lives inside a
+single sparse disk image, so deleting host files reclaims nothing. dustoff runs
+`docker system df`, shows what the daemon reports as reclaimable, and offers the
+matching prune for each bucket:
+
+| bucket | command | risk |
+|---|---|---|
+| Build cache | `docker builder prune -a -f` | rebuild |
+| Stopped containers | `docker container prune -f` | rebuild |
+| Unused images | `docker image prune -a -f` | careful |
+| Unused volumes | `docker volume prune -a -f` | **careful** |
+
+Volume pruning can destroy data — a database in a volume whose container was
+removed is exactly what it deletes — so it is marked `careful`, never selected by
+`A` or `--clean`, and called out by name in the confirmation.
+
+Host-side files are covered too: Docker Desktop logs and caches, Docker Scout's
+database, OrbStack logs, minikube's cached ISOs and cluster disks, Vagrant boxes,
+and Colima, Lima, Podman and Rancher Desktop VM images. The Docker Desktop and
+OrbStack disk images themselves are measured and reported but never deleted —
+removing them by hand destroys every image and volume at once.
+
+If Docker is not installed or not running, the probe yields nothing and the
+category simply does not appear.
 
 **System junk** — Trash, logs, crash reports, saved application state, QuickLook
 thumbnails, Mail downloads, `.DS_Store` litter.
@@ -160,6 +191,9 @@ catalog is treated as data that might be wrong.
   keys and certificates. Claude Code's `.credentials.json` and `~/.mcp-auth` are
   explicitly out of reach.
 - Symlinks are never followed, when sizing or when deleting.
+- The container prunes are the one thing that is not a path delete. Their argv is
+  a compile-time constant, passed straight to `exec` — there is no shell, and
+  nothing from the filesystem or the daemon is ever interpolated into a command.
 - Every path is vetted twice: once when found, again immediately before removal,
   because a list built minutes ago may be stale.
 - Failures are reported, never swallowed.
@@ -174,12 +208,14 @@ any `careful` items in the selection.
 cargo test
 ```
 
-17 tests covering the safety rails (traversal, secrets, containment, shallow
+26 tests covering the safety rails (traversal, secrets, containment, shallow
 paths), the scanner (sizing, age filters, missing paths), deletion semantics
 (dry run touches nothing, clear-contents keeps the folder, read-only Go module
 trees are removable, paths outside `$HOME` are refused even when passed in
 directly), and the interface (renders at 20×8 through 300×90 without panicking,
-every overlay, selection rules, filtering).
+every overlay, selection rules, filtering), plus the Docker layer (size parsing,
+table parsing, malformed output yielding nothing rather than wrong numbers, and
+the guarantee that volume pruning is never auto-selected).
 
 ## Contributing
 

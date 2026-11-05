@@ -31,6 +31,7 @@ pub fn cat_color(c: Cat) -> Color {
         Cat::Mobile => Color::Rgb(226, 182, 106),
         Cat::Browsers => Color::Rgb(134, 190, 232),
         Cat::Apps => Color::Rgb(146, 196, 160),
+        Cat::Containers => Color::Rgb(116, 174, 226),
         Cat::System => Color::Rgb(186, 186, 196),
         Cat::Downloads => Color::Rgb(226, 150, 120),
         Cat::Projects => Color::Rgb(202, 166, 136),

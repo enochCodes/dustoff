@@ -12,6 +12,7 @@ pub enum Cat {
     Mobile,
     Browsers,
     Apps,
+    Containers,
     System,
     Downloads,
     Projects,
@@ -24,6 +25,7 @@ pub const CATS: &[Cat] = &[
     Cat::Mobile,
     Cat::Browsers,
     Cat::Apps,
+    Cat::Containers,
     Cat::System,
     Cat::Downloads,
     Cat::Projects,
@@ -38,6 +40,7 @@ impl Cat {
             Cat::Mobile => "Xcode, iOS & Android",
             Cat::Browsers => "Browsers",
             Cat::Apps => "Applications",
+            Cat::Containers => "Docker & containers",
             Cat::System => "System junk",
             Cat::Downloads => "Downloads clutter",
             Cat::Projects => "Stale project artifacts",
@@ -51,6 +54,7 @@ impl Cat {
             Cat::Mobile => "▲",
             Cat::Browsers => "◉",
             Cat::Apps => "▣",
+            Cat::Containers => "▦",
             Cat::System => "⬟",
             Cat::Downloads => "▼",
             Cat::Projects => "◇",
@@ -73,6 +77,11 @@ impl Cat {
             }
             Cat::Browsers => "Page and GPU caches. Profiles, history and logins are untouched.",
             Cat::Apps => "Electron apps keep large render caches that regenerate silently.",
+            Cat::Containers => {
+                "Images, build cache and volumes live inside one sparse disk image, so \
+                 deleting host files reclaims nothing. The prune entries talk to the \
+                 daemon instead, and show what it reports as reclaimable."
+            }
             Cat::System => "Logs, crash reports, saved window state, thumbnails, Trash.",
             Cat::Downloads => "Installers for apps you already installed, and aborted transfers.",
             Cat::Projects => {
@@ -125,6 +134,10 @@ pub enum Act {
     Item,
     /// Report only; `hint` holds the command to run.
     Advise,
+    /// Run a fixed command instead of removing a path. Used for container
+    /// prunes, where the space is inside a VM and no host path can be deleted.
+    /// The argv is always a compile-time constant and is never passed to a shell.
+    Exec,
 }
 
 #[derive(Clone, Debug)]
@@ -153,6 +166,14 @@ pub enum Finder {
         min_mb: u64,
         older_days: u64,
     },
+    /// Measure this path and report its size without ever offering to delete
+    /// it. For things that are large and informative but must not be removed
+    /// directly, like a container VM's disk image.
+    Measured(&'static str),
+    /// Ask the Docker daemon what it considers reclaimable, and expand into one
+    /// runnable prune per category. Yields nothing when Docker is not installed
+    /// or not running.
+    DockerDf,
     /// Files anywhere under `roots` with an exact name (e.g. `.DS_Store`).
     Litter {
         roots: &'static [&'static str],
@@ -169,7 +190,8 @@ pub struct Rule {
     pub risk: Risk,
     pub act: Act,
     pub find: Finder,
-    /// Shown for `Act::Advise`, and as a footnote otherwise.
+    /// Shown for `Act::Advise`, and as a footnote otherwise. `Act::Exec` items
+    /// are produced by a probe, which supplies their argv directly.
     pub hint: &'static str,
 }
 
@@ -200,6 +222,25 @@ fn advise(label: &'static str, hint: &'static str, detail: &'static str) -> Rule
         risk: Risk::Rebuildable,
         act: Act::Advise,
         find: Finder::At(""),
+        hint,
+    }
+}
+
+/// A large thing worth knowing about that must not be deleted directly.
+fn measured(
+    cat: Cat,
+    label: &'static str,
+    path: &'static str,
+    hint: &'static str,
+    detail: &'static str,
+) -> Rule {
+    Rule {
+        cat,
+        label,
+        detail,
+        risk: Risk::Careful,
+        act: Act::Advise,
+        find: Finder::Measured(path),
         hint,
     }
 }
@@ -1329,14 +1370,6 @@ pub fn catalog() -> Vec<Rule> {
         ),
         r(
             Apps,
-            "Docker Desktop · logs",
-            Safe,
-            Clear,
-            At("~/Library/Containers/com.docker.docker/Data/log"),
-            "Daemon and VM logs. The disk image itself needs `docker system prune`.",
-        ),
-        r(
-            Apps,
             "Figma · cache",
             Safe,
             Clear,
@@ -1354,6 +1387,136 @@ pub fn catalog() -> Vec<Rule> {
             },
             "Render caches.",
         ),
+        // ───────────────────────────── Docker & containers ──────────────────
+        // Host-side files that really are deletable. Everything that matters
+        // for size lives inside the VM disk image and is handled by the prune
+        // entries below, which talk to the daemon.
+        r(
+            Containers,
+            "Docker Desktop · logs",
+            Safe,
+            Clear,
+            At("~/Library/Containers/com.docker.docker/Data/log"),
+            "Daemon and VM logs on the host side.",
+        ),
+        r(
+            Containers,
+            "Docker Desktop · app cache",
+            Safe,
+            Clear,
+            At("~/Library/Caches/com.docker.docker"),
+            "Electron and update cache for the desktop app.",
+        ),
+        r(
+            Containers,
+            "Docker Desktop · CLI logs",
+            Safe,
+            Clear,
+            At("~/.docker/desktop/log"),
+            "Logs written by the desktop helper.",
+        ),
+        r(
+            Containers,
+            "Docker Scout · cache",
+            Safe,
+            Clear,
+            At("~/.docker/scout"),
+            "Vulnerability database and analysis cache. Re-fetched on demand.",
+        ),
+        r(
+            Containers,
+            "OrbStack · logs",
+            Safe,
+            Clear,
+            At("~/.orbstack/log"),
+            "OrbStack daemon logs.",
+        ),
+        r(
+            Containers,
+            "minikube · cached ISOs and images",
+            Rebuildable,
+            Clear,
+            At("~/.minikube/cache"),
+            "Downloaded Kubernetes ISOs and preloaded image tarballs. Several GB \
+             per version, re-downloaded when a cluster is created.",
+        ),
+        r(
+            Containers,
+            "minikube · cluster disks",
+            Careful,
+            Each,
+            At("~/.minikube/machines"),
+            "Each cluster's virtual disk, with whatever you deployed into it.",
+        ),
+        r(
+            Containers,
+            "Vagrant · boxes",
+            Rebuildable,
+            Each,
+            At("~/.vagrant.d/boxes"),
+            "Downloaded base boxes, one per version. Large and re-downloadable.",
+        ),
+        r(
+            Containers,
+            "Colima · instances",
+            Careful,
+            Each,
+            At("~/.colima"),
+            "Colima VM state and disks. Removing an instance loses its containers.",
+        ),
+        r(
+            Containers,
+            "Lima · instances",
+            Careful,
+            Each,
+            At("~/.lima"),
+            "Lima VM instances and their disk images.",
+        ),
+        r(
+            Containers,
+            "Podman · machine images",
+            Careful,
+            Each,
+            At("~/.local/share/containers/podman/machine"),
+            "Podman machine disk images. Removing one loses its containers.",
+        ),
+        r(
+            Containers,
+            "Rancher Desktop · VM",
+            Careful,
+            Clear,
+            At("~/Library/Application Support/rancher-desktop/lima"),
+            "Rancher Desktop's Lima VM and its disk image.",
+        ),
+        // Sizes worth knowing, that must not be deleted from the host side.
+        measured(
+            Containers,
+            "Docker Desktop · VM disk image",
+            "~/Library/Containers/com.docker.docker/Data",
+            "docker system df   # then prune below; Docker Desktop > Troubleshoot > Clean / Purge data",
+            "Every image, container and volume lives in one sparse file here. Deleting \
+             it by hand destroys all of them at once, so it is reported, never removed. \
+             Pruning is what frees space inside it.",
+        ),
+        measured(
+            Containers,
+            "OrbStack · data image",
+            "~/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data",
+            "docker system df   # prune below; OrbStack shrinks the image on its own",
+            "OrbStack's sparse data image. It grows and shrinks automatically as you \
+             add and delete data, so pruning inside it is all that is needed.",
+        ),
+        // Asks the daemon what it can actually free, then offers to free it.
+        // Expands into one entry per type and yields nothing if Docker is absent.
+        Rule {
+            cat: Containers,
+            label: "Docker · reclaimable",
+            detail: "",
+            risk: Risk::Safe,
+            act: Act::Exec,
+            find: DockerDf,
+            hint: "",
+        },
         // ───────────────────────────── System junk ──────────────────────────
         r(
             System,
@@ -1551,9 +1714,10 @@ pub fn catalog() -> Vec<Rule> {
         ),
         advise(
             "Docker / OrbStack disk image",
-            "docker system prune -a --volumes && orb shrink",
-            "Images and volumes live inside one sparse disk file. Deleting the file \
-             destroys everything; pruning from inside is what actually reclaims space.",
+            "docker system prune -a",
+            "Covered in detail by the Docker & containers category, which asks the \
+             daemon what is reclaimable. This is the blunt equivalent. Add --volumes \
+             only if you are certain no volume holds data you want.",
         ),
         advise(
             "Unavailable iOS simulators",
